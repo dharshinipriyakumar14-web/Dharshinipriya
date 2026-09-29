@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EduGenie</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>EduGenie</h1>
+      <p>Ask, learn, summarize and test yourself, powered by Google Gemini.</p>
+    </header>
+
+    <form id="form">
+      <label for="task">What do you want to do?</label>
+      <select id="task">
+        <option value="qna">Ask a question</option>
+        <option value="explain">Explain a concept</option>
+        <option value="quiz">Generate a quiz</option>
+        <option value="summary">Summarize a passage</option>
+        <option value="path">Recommend a learning path</option>
+      </select>
+
+      <label for="text">Your input</label>
+      <textarea id="text" rows="7" required></textarea>
+
+      <button type="submit" id="submit">Ask</button>
+    </form>
+
+    <section id="result" aria-live="polite" hidden></section>
+  </main>
+
+{% raw %}
+<script>
+const TASKS = {
+  qna:     { url: "/qa",                     button: "Ask",           hint: "e.g. Which is the largest ocean?" },
+  explain: { url: "/explain",                button: "Explain",       hint: "e.g. Photosynthesis" },
+  quiz:    { url: "/quiz",                   button: "Generate quiz", hint: "Enter a topic (e.g. Pythagoras Theorem) or paste a passage" },
+  summary: { url: "/summarize",              button: "Summarize",     hint: "Paste the passage you want summarized" },
+  path:    { url: "/learn/recommendations",  button: "Create path",   hint: "e.g. SQL" },
+};
+
+const form = document.getElementById("form");
+const taskEl = document.getElementById("task");
+const textEl = document.getElementById("text");
+const button = document.getElementById("submit");
+const resultEl = document.getElementById("result");
+
+function updateTask() {
+  const t = TASKS[taskEl.value];
+  textEl.placeholder = t.hint;
+  button.textContent = t.button;
+}
+taskEl.addEventListener("change", updateTask);
+updateTask();
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function inline(s) {
+  return s
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(\S(?:.*?\S)?)\*/g, "<em>$1</em>")
+    .replace(/`(.+?)`/g, "<code>$1</code>");
+}
+
+// Tiny Markdown renderer: headings, bullet lists, bold, italics, paragraphs.
+function renderMarkdown(md) {
+  let html = "", inList = false;
+  const closeList = () => { if (inList) { html += "</ul>"; inList = false; } };
+  for (const raw of escapeHtml(md).split("\n")) {
+    const line = raw.trim();
+    let m;
+    if (!line) { closeList(); continue; }
+    if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
+      closeList();
+      const level = m[1].length <= 2 ? 3 : 4;
+      html += `<h${level}>${inline(m[2])}</h${level}>`;
+    } else if ((m = line.match(/^[-*\u2022]\s+(.*)$/))) {
+      if (!inList) { html += "<ul>"; inList = true; }
+      html += `<li>${inline(m[1])}</li>`;
+    } else {
+      closeList();
+      html += `<p>${inline(line)}</p>`;
+    }
+  }
+  closeList();
+  return html;
+}
+
+function showText(markdown) {
+  resultEl.className = "";
+  resultEl.innerHTML = renderMarkdown(markdown);
+}
+
+function showError(message) {
+  resultEl.className = "error";
+  resultEl.textContent = message;
+}
+
+function showQuiz(questions) {
+  resultEl.className = "quiz";
+  resultEl.innerHTML = "";
+  let answered = 0, score = 0;
+
+  const scoreEl = document.createElement("p");
+  scoreEl.className = "score";
+
+  questions.forEach((q, qi) => {
+    const box = document.createElement("div");
+    box.className = "question";
+    box.innerHTML = `<h3>${qi + 1}. ${escapeHtml(q.question)}</h3>`;
+    const buttons = [];
+
+    q.options.forEach((opt, oi) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "option";
+      b.textContent = opt;
+      b.addEventListener("click", () => {
+        buttons.forEach(x => x.disabled = true);
+        answered++;
+        if (oi === q.answer_index) {
+          b.classList.add("correct");
+          score++;
+        } else {
+          b.classList.add("wrong");
+          buttons[q.answer_index].classList.add("correct");
+          const note = document.createElement("p");
+          note.className = "note";
+          note.textContent = "Correct answer: " + q.options[q.answer_index];
+          box.appendChild(note);
+        }
+        if (answered === questions.length) {
+          scoreEl.textContent = `You scored ${score} out of ${questions.length}.`;
+          resultEl.appendChild(scoreEl);
+        }
+      });
+      buttons.push(b);
+      box.appendChild(b);
+    });
+    resultEl.appendChild(box);
+  });
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const task = TASKS[taskEl.value];
+  button.disabled = true;
+  button.textContent = "Working...";
+  resultEl.hidden = false;
+  resultEl.className = "";
+  resultEl.textContent = "Thinking...";
+
+  try {
+    const response = await fetch(task.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: textEl.value }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Something went wrong.");
+    if (taskEl.value === "quiz") showQuiz(data.result);
+    else showText(data.result);
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = task.button;
+  }
+});
+</script>
+{% endraw %}
+</body>
+</html>
